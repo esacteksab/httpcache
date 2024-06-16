@@ -18,6 +18,7 @@ var s struct {
 	server    *httptest.Server
 	client    http.Client
 	transport *Transport
+	done      chan struct{} // Closed to unlock infinite handlers.
 }
 
 type fakeClock struct {
@@ -41,6 +42,7 @@ func setup() {
 	client := http.Client{Transport: tp}
 	s.transport = tp
 	s.client = client
+	s.done = make(chan struct{})
 
 	mux := http.NewServeMux()
 	s.server = httptest.NewServer(mux)
@@ -118,6 +120,17 @@ func setup() {
 		w.Write([]byte("Some text content"))
 	}))
 
+	mux.HandleFunc("/cachederror", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		etag := "abc"
+		if r.Header.Get("if-none-match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("etag", etag)
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte("Not found"))
+	}))
+
 	updateFieldsCounter := 0
 	mux.HandleFunc("/updatefields", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Counter", strconv.Itoa(updateFieldsCounter))
@@ -129,9 +142,26 @@ func setup() {
 		}
 		w.Write([]byte("Some text content"))
 	}))
+
+	// Take 3 seconds to return 200 OK (for testing client timeouts).
+	mux.HandleFunc("/3seconds", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+	}))
+
+	mux.HandleFunc("/infinite", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for {
+			select {
+			case <-s.done:
+				return
+			default:
+				w.Write([]byte{0})
+			}
+		}
+	}))
 }
 
 func teardown() {
+	close(s.done)
 	s.server.Close()
 }
 
@@ -196,6 +226,30 @@ func TestCacheableMethod(t *testing.T) {
 		if resp.Header.Get(XFromCache) != "" {
 			t.Errorf("XFromCache header isn't blank")
 		}
+	}
+}
+
+func TestDontServeHeadResponseToGetRequest(t *testing.T) {
+	resetTest()
+	url := s.server.URL + "/"
+	req, err := http.NewRequest(http.MethodHead, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err = http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Header.Get(XFromCache) != "" {
+		t.Errorf("Cache should not match")
 	}
 }
 
@@ -311,6 +365,58 @@ func TestDontStorePartialRangeInCache(t *testing.T) {
 	}
 }
 
+func TestCacheOnlyIfBodyRead(t *testing.T) {
+	resetTest()
+	{
+		req, err := http.NewRequest("GET", s.server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Header.Get(XFromCache) != "" {
+			t.Fatal("XFromCache header isn't blank")
+		}
+		// We do not read the body
+		resp.Body.Close()
+	}
+	{
+		req, err := http.NewRequest("GET", s.server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.Header.Get(XFromCache) != "" {
+			t.Fatalf("XFromCache header isn't blank")
+		}
+	}
+}
+
+func TestOnlyReadBodyOnDemand(t *testing.T) {
+	resetTest()
+
+	req, err := http.NewRequest("GET", s.server.URL+"/infinite", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.client.Do(req) // This shouldn't hang forever.
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 10) // Only partially read the body.
+	_, err = resp.Body.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+}
+
 func TestGetOnlyIfCachedHit(t *testing.T) {
 	resetTest()
 	{
@@ -325,6 +431,10 @@ func TestGetOnlyIfCachedHit(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.Header.Get(XFromCache) != "" {
 			t.Fatal("XFromCache header isn't blank")
+		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	{
@@ -439,6 +549,11 @@ func TestGetWithEtag(t *testing.T) {
 		if resp.Header.Get(XFromCache) != "" {
 			t.Fatal("XFromCache header isn't blank")
 		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -474,6 +589,10 @@ func TestGetWithLastModified(t *testing.T) {
 		if resp.Header.Get(XFromCache) != "" {
 			t.Fatal("XFromCache header isn't blank")
 		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -502,6 +621,10 @@ func TestGetWithVary(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.Header.Get("Vary") != "Accept" {
 			t.Fatalf(`Vary header isn't "Accept": %v`, resp.Header.Get("Vary"))
+		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	{
@@ -554,6 +677,10 @@ func TestGetWithDoubleVary(t *testing.T) {
 		defer resp.Body.Close()
 		if resp.Header.Get("Vary") == "" {
 			t.Fatalf(`Vary header is blank`)
+		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	{
@@ -613,6 +740,10 @@ func TestGetWith2VaryHeaders(t *testing.T) {
 		if resp.Header.Get("Vary") == "" {
 			t.Fatalf(`Vary header is blank`)
 		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -668,6 +799,10 @@ func TestGetWith2VaryHeaders(t *testing.T) {
 		if resp.Header.Get(XFromCache) != "" {
 			t.Fatal("XFromCache header isn't blank")
 		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -697,6 +832,10 @@ func TestGetVaryUnused(t *testing.T) {
 		if resp.Header.Get("Vary") == "" {
 			t.Fatalf(`Vary header is blank`)
 		}
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -724,6 +863,10 @@ func TestUpdateFields(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		counter = resp.Header.Get("x-counter")
+		_, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	{
 		resp, err := s.client.Do(req)
@@ -738,6 +881,35 @@ func TestUpdateFields(t *testing.T) {
 	}
 	if counter == counter2 {
 		t.Fatalf(`both "x-counter" values are equal: %v %v`, counter, counter2)
+	}
+}
+
+// This tests the fix for https://github.com/gregjones/httpcache/issues/74.
+// Previously, after validating a cached response, its StatusCode
+// was incorrectly being replaced.
+func TestCachedErrorsKeepStatus(t *testing.T) {
+	resetTest()
+	req, err := http.NewRequest("GET", s.server.URL+"/cachederror", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	{
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		io.Copy(ioutil.Discard, resp.Body)
+	}
+	{
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("Status code isn't 404: %d", resp.StatusCode)
+		}
 	}
 }
 
@@ -1048,6 +1220,10 @@ func TestStaleIfErrorRequest(t *testing.T) {
 	if resp == nil {
 		t.Fatal("resp is nil")
 	}
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// On failure, response is returned from the cache
 	tmock.response = nil
@@ -1089,6 +1265,10 @@ func TestStaleIfErrorRequestLifetime(t *testing.T) {
 	if resp == nil {
 		t.Fatal("resp is nil")
 	}
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// On failure, response is returned from the cache
 	tmock.response = nil
@@ -1114,7 +1294,7 @@ func TestStaleIfErrorRequestLifetime(t *testing.T) {
 
 	// If failure last more than max stale, error is returned
 	clock = &fakeClock{elapsed: 200 * time.Second}
-	resp, err = tp.RoundTrip(r)
+	_, err = tp.RoundTrip(r)
 	if err != tmock.err {
 		t.Fatalf("got err %v, want %v", err, tmock.err)
 	}
@@ -1146,6 +1326,10 @@ func TestStaleIfErrorResponse(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("resp is nil")
+	}
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// On failure, response is returned from the cache
@@ -1187,6 +1371,10 @@ func TestStaleIfErrorResponseLifetime(t *testing.T) {
 	if resp == nil {
 		t.Fatal("resp is nil")
 	}
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// On failure, response is returned from the cache
 	tmock.response = nil
@@ -1201,8 +1389,87 @@ func TestStaleIfErrorResponseLifetime(t *testing.T) {
 
 	// If failure last more than max stale, error is returned
 	clock = &fakeClock{elapsed: 200 * time.Second}
-	resp, err = tp.RoundTrip(r)
+	_, err = tp.RoundTrip(r)
 	if err != tmock.err {
 		t.Fatalf("got err %v, want %v", err, tmock.err)
+	}
+}
+
+// This tests the fix for https://github.com/gregjones/httpcache/issues/74.
+// Previously, after a stale response was used after encountering an error,
+// its StatusCode was being incorrectly replaced.
+func TestStaleIfErrorKeepsStatus(t *testing.T) {
+	resetTest()
+	now := time.Now()
+	tmock := transportMock{
+		response: &http.Response{
+			Status:     http.StatusText(http.StatusNotFound),
+			StatusCode: http.StatusNotFound,
+			Header: http.Header{
+				"Date":          []string{now.Format(time.RFC1123)},
+				"Cache-Control": []string{"no-cache"},
+			},
+			Body: ioutil.NopCloser(bytes.NewBuffer([]byte("some data"))),
+		},
+		err: nil,
+	}
+	tp := NewMemoryCacheTransport()
+	tp.Transport = &tmock
+
+	// First time, response is cached on success
+	r, _ := http.NewRequest("GET", "http://somewhere.com/", nil)
+	r.Header.Set("Cache-Control", "stale-if-error")
+	resp, err := tp.RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("resp is nil")
+	}
+	_, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// On failure, response is returned from the cache
+	tmock.response = nil
+	tmock.err = errors.New("some error")
+	resp, err = tp.RoundTrip(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("resp is nil")
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("Status wasn't 404: %d", resp.StatusCode)
+	}
+}
+
+// Test that http.Client.Timeout is respected when cache transport is used.
+// That is so as long as request cancellation is propagated correctly.
+// In the past, that required CancelRequest to be implemented correctly,
+// but modern http.Client uses Request.Cancel (or request context) instead,
+// so we don't have to do anything.
+func TestClientTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping timeout test in short mode") // Because it takes at least 3 seconds to run.
+	}
+	resetTest()
+	client := &http.Client{
+		Transport: NewMemoryCacheTransport(),
+		Timeout:   time.Second,
+	}
+	started := time.Now()
+	resp, err := client.Get(s.server.URL + "/3seconds")
+	taken := time.Since(started)
+	if err == nil {
+		t.Error("got nil error, want timeout error")
+	}
+	if resp != nil {
+		t.Error("got non-nil resp, want nil resp")
+	}
+	if taken >= 2*time.Second {
+		t.Error("client.Do took 2+ seconds, want < 2 seconds")
 	}
 }
