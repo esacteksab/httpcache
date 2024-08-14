@@ -4,7 +4,6 @@ package badgerdbcache
 
 import (
 	"context"
-	"log"
 
 	badger "github.com/dgraph-io/badger/v4"
 )
@@ -38,7 +37,6 @@ func (c *Cache) Get(_ context.Context, key string) (resp []byte, ok bool, err er
 
 // Set saves a response to the cache as key
 func (c *Cache) Set(_ context.Context, key string, resp []byte) error {
-	log.Println("Set", key, string(resp))
 	return c.db.Update(func(txn *badger.Txn) error {
 		return txn.Set([]byte(key), resp)
 	})
