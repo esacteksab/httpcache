@@ -7,7 +7,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/gregjones/httpcache/test"
+	"github.com/esacteksab/httpcache/test"
 )
 
 const testServer = "localhost:11211"

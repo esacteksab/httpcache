@@ -3,7 +3,8 @@ package redis
 
 import (
 	"github.com/gomodule/redigo/redis"
-	"github.com/gregjones/httpcache"
+
+	"github.com/esacteksab/httpcache"
 )
 
 // cache is an implementation of httpcache.Cache that caches responses in a
