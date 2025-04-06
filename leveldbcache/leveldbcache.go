@@ -37,7 +37,6 @@ func New(path string) (*Cache, error) {
 
 	var err error
 	cache.db, err = leveldb.OpenFile(path, nil)
-
 	if err != nil {
 		return nil, err
 	}
