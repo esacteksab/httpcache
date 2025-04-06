@@ -54,7 +54,7 @@ func Open(path string, bucket []byte) (*bbolt.DB, *Cache, error) {
 	if bucket == nil {
 		bucket = []byte("cache")
 	}
-	db, err := bbolt.Open(path, 0600, nil)
+	db, err := bbolt.Open(path, 0o600, nil)
 	if err != nil {
 		return nil, nil, err
 	}

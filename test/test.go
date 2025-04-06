@@ -7,7 +7,7 @@ import (
 	"github.com/gregjones/httpcache"
 )
 
-// Cache excercises a httpcache.Cache implementation.
+// Cache exercises a httpcache.Cache implementation.
 func Cache(t *testing.T, cache httpcache.Cache) {
 	key := "testKey"
 	_, ok := cache.Get(key)
