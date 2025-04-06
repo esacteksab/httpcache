@@ -3,7 +3,6 @@
 //
 // It is only suitable for use as a 'private' cache (i.e. for a web-browser or an API-client
 // and not for a shared proxy).
-//
 package httpcache
 
 import (
@@ -13,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -64,7 +62,10 @@ func (c cacheAsContextCache) Delete(_ context.Context, key string) error {
 }
 
 // Get implements ContextCache
-func (c cacheAsContextCache) Get(_ context.Context, key string) (responseBytes []byte, ok bool, err error) {
+func (c cacheAsContextCache) Get(
+	_ context.Context,
+	key string,
+) (responseBytes []byte, ok bool, err error) {
 	got, ok := c.cache.Get(key)
 	return got, ok, nil
 }
@@ -111,7 +112,7 @@ func contextCachedResponse(c ContextCache, req *http.Request) (resp *http.Respon
 	return http.ReadResponse(bufio.NewReader(b), req)
 }
 
-// MemoryCache is an implemtation of Cache that stores responses in an in-memory map.
+// MemoryCache is an implementation of Cache that stores responses in an in-memory map.
 type MemoryCache struct {
 	mu    sync.RWMutex
 	items map[string][]byte
@@ -311,7 +312,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 				R: resp.Body,
 				OnEOF: func(r io.Reader) error {
 					resp := *resp
-					resp.Body = ioutil.NopCloser(r)
+					resp.Body = io.NopCloser(r)
 					respBytes, err := httputil.DumpResponse(&resp, true)
 					if err == nil {
 						if t.ContextCache != nil {
@@ -383,7 +384,7 @@ var clock timer = &realClock{}
 // transparent indicates the response should not be used to fulfil the request
 //
 // Because this is only a private cache, 'public' and 'private' in cache-control aren't
-// signficant. Similarly, smax-age isn't used.
+// significant. Similarly, smax-age isn't used.
 func getFreshness(respHeaders, reqHeaders http.Header) (freshness int) {
 	respCacheControl := parseCacheControl(respHeaders)
 	reqCacheControl := parseCacheControl(reqHeaders)
