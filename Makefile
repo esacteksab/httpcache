@@ -6,38 +6,53 @@ SHELL := bash
 .SUFFIXES:
 
 .PHONY: audit
-audit: tidy format
+audit: tidy fmt
 	go vet ./...
 	go tool -modfile=go.tool.mod staticcheck ./...
 	go tool -modfile=go.tool.mod govulncheck ./...
+	golangci-lint run -v
 
-.PHONY: clean
-clean:
-ifneq (,$(wildcard ./dist))
-	rm -rf dist/
-endif
 
 .PHONY: build
 build:
+
 	goreleaser build --clean --single-target --snapshot
 
-.PHONY: format
-format:
+.PHONY: clean
+clean:
+
+ifneq (,$(wildcard ./dist))
+	rm -rf dist
+
+endif
+
+ifneq (,$(wildcard ./coverage))
+	rm -rf coverage/
+
+endif
+
+
+.PHONY: fmt
+fmt:
+	golines --base-formatter=gofumpt -w .
 	go tool -modfile=go.tool.mod gofumpt -l -w -extra .
+
+
 
 .PHONY: lint
 lint:
 	golangci-lint run -v
 
-.PHONY: tidy
-tidy:
-	go mod tidy
-
 .PHONY: test
 test: tidy
 	go test ./... -cover
 
+.PHONY: tidy
+tidy:
+	go mod tidy
+
 .PHONY: update
 update:
 	go get -u ./...
+	go get -u -modfile=go.tool.mod tool
 	go mod tidy
