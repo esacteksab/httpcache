@@ -2,11 +2,10 @@ version: "2"
 run:
   timeout: 5m
   tests: true
-  go: "1.24.3"
+  go: "1.24.4"
 linters:
   enable:
     - dupl
-    - errcheck
     - godox
     - gosec
     - govet
@@ -28,9 +27,10 @@ linters:
       - path: _test\.go
         linters:
           - dupl
-          - errcheck
           - goconst
           - gosec
+          - errcheck
+          - mnd
 formatters:
   enable:
     - gofumpt
