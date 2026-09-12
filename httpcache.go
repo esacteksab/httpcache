@@ -90,7 +90,7 @@ func cacheKey(req *http.Request) string {
 func CachedResponse(c Cache, req *http.Request) (resp *http.Response, err error) {
 	cachedVal, ok := c.Get(cacheKey(req))
 	if !ok {
-		return
+		return resp, err
 	}
 
 	b := bytes.NewBuffer(cachedVal)
@@ -105,7 +105,7 @@ func contextCachedResponse(c ContextCache, req *http.Request) (resp *http.Respon
 		return nil, fmt.Errorf("httpcache Get error: %w", err)
 	}
 	if !ok {
-		return
+		return resp, err
 	}
 
 	b := bytes.NewBuffer(cachedVal)
@@ -358,7 +358,7 @@ func Date(respHeaders http.Header) (date time.Time, err error) {
 	dateHeader := respHeaders.Get("date")
 	if dateHeader == "" {
 		err = ErrNoDateHeader
-		return
+		return date, err
 	}
 
 	return time.Parse(time.RFC1123, dateHeader)

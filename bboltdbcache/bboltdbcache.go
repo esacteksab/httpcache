@@ -27,7 +27,7 @@ func (c *Cache) Get(_ context.Context, key string) (resp []byte, ok bool, err er
 	}); err != nil {
 		return nil, false, err
 	}
-	return
+	return resp, ok, err
 }
 
 // Set saves a response to the cache as key
